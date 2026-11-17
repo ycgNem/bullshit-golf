@@ -31,6 +31,17 @@ const L = {
     "He's laid the sod over that one.",
   ],
   top: ['Topped it. A worm-burner. The worms have filed a complaint.', 'That never got above knee height.', 'Along the floor. A putt, with the wrong club.'],
+  whiff: [
+    'An air shot. The ball has not moved. It counts.',
+    'He has missed it. Entirely. The ball is embarrassed for him.',
+    'A practice swing, he will say. It was not a practice swing.',
+    'Nothing but atmosphere. That is a stroke.',
+  ],
+  toe: [
+    'Off the toe. It has gone sideways like a startled crab.',
+    'Right off the end of the club. There is no grass on that part.',
+    'Toed it. The ball barely noticed.',
+  ],
   yip: ['A yip. A full-body yip.', 'He flinched. You hate to see it. We love to see it.'],
   steer: [
     'The ball appears to be... turning. In the air. On its own.',

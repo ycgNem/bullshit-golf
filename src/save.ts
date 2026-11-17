@@ -15,7 +15,7 @@ export interface UpgradeDef {
 
 export const UPGRADES: UpgradeDef[] = [
   { id: 'juice', name: 'Spin Juice Tank', blurb: 'A bigger reservoir of whatever is in that flask. More after-touch per hole.', per: '+0.5 s of steering', max: 5, cost: 260, growth: 1.6 },
-  { id: 'tape', name: 'Lead Tape', blurb: 'Stuck all over the club head. Technically legal. Widens the clean-strike window.', per: '+8% strike window', max: 5, cost: 220, growth: 1.6 },
+  { id: 'tape', name: 'Lead Tape', blurb: 'Stuck all over the club head. Technically legal. A bigger sweet spot, and more margin on path and tempo.', per: '+8% forgiveness', max: 5, cost: 220, growth: 1.6 },
   { id: 'gym', name: 'Gym Membership', blurb: 'You went twice. It helped anyway.', per: '+2% ball speed', max: 5, cost: 240, growth: 1.65 },
   { id: 'xmas', name: "Marshal's Christmas Card", blurb: 'A card. With cash in it. He remembers who his friends are.', per: '-10% suspicion gained', max: 5, cost: 300, growth: 1.7 },
   { id: 'shades', name: 'Gift: Tinted Sunglasses', blurb: 'A thoughtful present for the marshal. Very dark lenses.', per: 'looks away 12% longer', max: 4, cost: 280, growth: 1.7 },
@@ -33,6 +33,8 @@ export interface Save {
   upgrades: Record<UpgradeId, number>;
   volume: number;
   quality: Quality;
+  /** mouse travel for a full swing, as a multiple of the default */
+  sens: number;
 }
 
 const KEY = 'bullshit-golf-save-v1';
@@ -41,7 +43,7 @@ export function freshSave(): Save {
   return {
     money: 0, week: 1, rounds: 0, best: null, dqs: 0,
     upgrades: { juice: 0, tape: 0, gym: 0, xmas: 0, sleeve: 0, ball: 0, shades: 0 },
-    volume: 0.7, quality: 'high',
+    volume: 0.7, quality: 'high', sens: 1,
   };
 }
 

@@ -5,8 +5,15 @@ marshal who is not always looking.
 
 ## The idea
 
-The golf is played straight: drag and Magnus lift on the ball, a three-press swing with a strike
-window measured in milliseconds, turf that bounces and checks, greens that break.
+The golf is played straight: drag and Magnus lift on the ball, turf that bounces and checks, greens
+that break, and a swing you make with the mouse. It is judged on the three things a launch monitor
+reports:
+
+- **Path.** Push straight through and it flies straight. Swing out to the right and it draws; cut
+  across to the left and it fades.
+- **Contact.** Come back through the ball. Wide right catches the hosel, wide left the toe.
+- **Tempo.** Three counts back, one through (two to one with the putter). Snatch it and you thin
+  it; ease off and you hit it fat.
 
 Then you cheat.
 
@@ -22,12 +29,12 @@ Play a hole with no card and no after-touch and he calms down.
 
 ## Controls
 
-| Key | What it does |
+| Input | What it does |
 |---|---|
-| `A` / `D` | Aim |
-| `W` / `S` | Change club |
-| `Space` | Start the swing, set power, strike |
-| `A` `D` `W` `S` in flight | After-touch: bend, dive, float |
+| Hold left mouse, pull back, push through | The swing. How far you pull is the power |
+| Right-drag or `A` / `D` | Aim |
+| Mouse wheel or `W` / `S` | Change club |
+| `A` `D` `W` `S` in flight, or hold left mouse and drag | After-touch: bend, dive, float |
 | `F` | Foot wedge (with the card) |
 | `M` | Mulligan (with the card) |
 | `Esc` | Pause |

@@ -1,21 +1,12 @@
 import type { Card } from './cards';
 import { UPGRADES, upgradeCost, type Save, type UpgradeId } from './save';
+import { SwingPad, type PadView } from './swingpad';
 import type { Quality } from './world';
 
 export type MarshalState = 'away' | 'turning' | 'watching';
+export type Tone = '' | 'good' | 'warn' | 'bad' | 'cheat';
 
-export interface MeterView {
-  /** marker position along the bar, 0..1 */
-  marker: number;
-  /** locked power position, or -1 while still rising */
-  power: number;
-  sweet: number;
-  full: number;
-  /** half-width of the clean-strike window in bar units */
-  window: number;
-  /** putting guide position, or -1 */
-  tick: number;
-}
+export interface MonitorRow { k: string; v: string; u?: string; tone?: Tone }
 
 export interface HoleSummary {
   title: string;
@@ -49,16 +40,27 @@ const el = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode =
 export const fmtPar = (n: number): string => (n === 0 ? 'E' : n > 0 ? `+${n}` : `${n}`);
 const money = (n: number): string => `$${Math.round(n).toLocaleString('en-US')}`;
 
+/** Little mouse pictures for the control hints: left button, right button, wheel. */
+const mouseSvg = (part: 'l' | 'r' | 'w'): string => /* html */ `<svg class="ms" viewBox="0 0 16 22"><rect x="1" y="1" width="14" height="20" rx="7" fill="none" stroke="currentColor" stroke-width="1.5"/>${
+  part === 'l' ? '<path d="M8 1.6A6.4 6.4 0 0 0 1.6 8v1.4H8Z" fill="currentColor"/>'
+    : part === 'r' ? '<path d="M8 1.6A6.4 6.4 0 0 1 14.4 8v1.4H8Z" fill="currentColor"/>'
+      : '<rect x="6.6" y="4" width="2.8" height="6" rx="1.4" fill="currentColor"/>'}</svg>`;
+export const MOUSE = { l: mouseSvg('l'), r: mouseSvg('r'), w: mouseSvg('w') };
+
 const EYE: Record<MarshalState, string> = {
-  away: '<svg viewBox="0 0 64 40"><path d="M6 22 Q32 34 58 22" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M14 27l-4 6M26 31l-2 7M38 31l2 7M50 27l4 6" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>',
-  turning: '<svg viewBox="0 0 64 40"><path d="M6 20 Q32 4 58 20 Q32 30 6 20Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><circle cx="44" cy="19" r="5" fill="currentColor"/></svg>',
-  watching: '<svg viewBox="0 0 64 40"><path d="M4 20 Q32 -6 60 20 Q32 46 4 20Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><circle cx="32" cy="20" r="9" fill="currentColor"/><circle cx="35" cy="17" r="3" fill="#fff"/></svg>',
+  away: '<svg viewBox="0 0 64 40"><path d="M8 20 Q32 34 56 20" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/><path d="M16 26l-3 6M27 30l-1.5 7M37 30l1.5 7M48 26l3 6" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/></svg>',
+  turning: '<svg viewBox="0 0 64 40"><path d="M6 20 Q32 4 58 20 Q32 32 6 20Z" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linejoin="round"/><circle cx="44" cy="19" r="5.5" fill="currentColor"/></svg>',
+  watching: '<svg viewBox="0 0 64 40"><path d="M4 20 Q32 -6 60 20 Q32 46 4 20Z" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linejoin="round"/><circle cx="32" cy="20" r="9.5" fill="currentColor"/><circle cx="35.5" cy="16.5" r="3" fill="#fff"/></svg>',
 };
-const EYE_LABEL: Record<MarshalState, string> = { away: 'NOT LOOKING', turning: 'TURNING AROUND', watching: 'WATCHING YOU' };
+const EYE_LABEL: Record<MarshalState, string> = { away: 'NOT LOOKING', turning: 'TURNING ROUND', watching: 'WATCHING YOU' };
+const RING = 2 * Math.PI * 31;
+
+const WORDMARK = '<h1 class="wordmark">BULLSHIT<em>GOLF</em></h1>';
 
 export class Hud {
   private readonly hud: HTMLElement;
   private readonly screen: HTMLElement;
+  private readonly pad: SwingPad;
   private readonly cache = new Map<string, string>();
   private captionTimer = 0;
   private toastTimer = 0;
@@ -68,53 +70,80 @@ export class Hud {
     root.innerHTML = /* html */ `
       <div id="hud" class="hidden">
         <div class="vignette"></div>
+
         <div class="tl">
-          <div class="plate"><b id="h-hole"></b><span id="h-info"></span></div>
-          <div class="plate small"><span>STROKE</span><b id="h-stroke">1</b><span>ROUND</span><b id="h-total">E</b><span id="h-money" class="cash"></span></div>
-          <div id="h-card" class="plate small card-badge hidden"></div>
+          <div class="bug panel">
+            <div class="bug-hole"><span class="lbl">HOLE</span><b id="h-hole"></b></div>
+            <div class="bug-main"><b id="h-name"></b><span class="lbl" id="h-info"></span></div>
+            <div class="bug-stat"><span class="lbl">STROKE</span><b class="num" id="h-stroke">1</b></div>
+            <div class="bug-stat"><span class="lbl">ROUND</span><b class="num" id="h-total">E</b></div>
+            <div class="bug-stat cash"><span class="lbl">PURSE</span><b class="num" id="h-money"></b></div>
+          </div>
+          <div id="h-card" class="cardchip hidden"></div>
         </div>
+
         <div class="tr">
-          <div class="marshal" id="h-marshal" data-state="away">
-            <div class="eye" id="h-eye"></div>
-            <div class="mtext"><span>MARSHAL</span><b id="h-eyelabel"></b></div>
-            <div class="sus"><div class="susfill" id="h-sus"></div><i>SUSPICION</i><em id="h-susn">0</em></div>
+          <div class="marshal panel" id="h-marshal" data-state="away">
+            <div class="gauge">
+              <svg viewBox="0 0 72 72"><circle class="g-bg" cx="36" cy="36" r="31"/><circle class="g-fill" id="h-sus" cx="36" cy="36" r="31" stroke-dasharray="${RING.toFixed(1)}" stroke-dashoffset="${RING.toFixed(1)}"/></svg>
+              <div class="eye" id="h-eye"></div>
+            </div>
+            <div class="mtext">
+              <span class="lbl">COURSE MARSHAL</span>
+              <b id="h-eyelabel"></b>
+              <div class="susrow"><span class="lbl">SUSPICION</span><em class="num" id="h-susn">0</em><span class="lbl">/ 100</span></div>
+            </div>
           </div>
-          <div class="wind plate">
-            <svg id="h-windarrow" viewBox="-20 -20 40 40"><path d="M0 -15 L9 4 L2.5 2 L2.5 15 L-2.5 15 L-2.5 2 L-9 4 Z" fill="currentColor"/></svg>
-            <div><b id="h-wind">0</b><span>MPH WIND</span></div>
+          <div class="wind panel">
+            <div class="compass">
+              <svg viewBox="-24 -24 48 48"><circle r="21" fill="none" stroke="currentColor" stroke-opacity="0.22" stroke-width="1.5"/><path d="M0 -21v4M0 21v-4M-21 0h4M21 0h-4" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5"/></svg>
+              <svg id="h-windarrow" viewBox="-24 -24 48 48"><path d="M0 -15 L7.5 3 L2 1.2 L2 14 L-2 14 L-2 1.2 L-7.5 3 Z" fill="currentColor"/></svg>
+            </div>
+            <div class="windtext"><div><b class="num" id="h-wind">0</b><span class="lbl">MPH</span></div><em class="lbl" id="h-windlbl"></em></div>
           </div>
         </div>
+
         <div class="bl">
-          <div class="plate club"><span id="h-lie"></span><b id="h-club"></b><em id="h-carry"></em></div>
-          <div class="plate small"><span>TO PIN</span><b id="h-pin"></b><span id="h-read"></span></div>
-        </div>
-        <div class="hints" id="h-hints"></div>
-        <div class="meter hidden" id="h-meter">
-          <div class="mlabel" id="h-mlabel"></div>
-          <div class="bar">
-            <div class="over" id="m-over"></div>
-            <div class="fill" id="m-fill"></div>
-            <div class="win" id="m-win"></div>
-            <div class="sweet" id="m-sweet"></div>
-            <div class="full" id="m-full"><i>100</i></div>
-            <div class="tick hidden" id="m-tick"></div>
-            <div class="pow hidden" id="m-pow"></div>
-            <div class="marker" id="m-marker"></div>
+          <div class="bag panel" id="h-bag">
+            <div class="bag-top"><span class="chip" id="h-lie"></span><span class="lbl" id="h-read"></span></div>
+            <div class="bag-club"><b id="h-club"></b><em class="num" id="h-carry"></em></div>
+            <div class="bag-pin"><span class="lbl">TO PIN</span><b class="num" id="h-pin"></b><span class="lbl" id="h-pinunit"></span></div>
+            <div class="bag-strip" id="h-strip"></div>
+          </div>
+          <div class="monitor panel hidden" id="h-monitor">
+            <div class="mon-head"><span class="lbl">LAUNCH MONITOR</span><i></i></div>
+            <div class="mon-grid" id="h-mongrid"></div>
           </div>
         </div>
-        <div class="juice hidden" id="h-juice">
-          <div class="jhead"><b>SPIN JUICE</b><span id="h-juicen"></span></div>
-          <div class="jbar"><div class="jfill" id="h-juicefill"></div></div>
-          <div class="jkeys"><kbd>A</kbd><kbd>D</kbd> bend it &nbsp; <kbd>W</kbd> dive &nbsp; <kbd>S</kbd> float</div>
+
+        <div class="br">
+          <div class="pad panel" id="h-pad">
+            <div class="pad-head"><span class="lbl" id="h-padtitle">SWING</span><b class="num" id="h-padpow"></b></div>
+            <canvas id="h-padcv"></canvas>
+            <div class="pad-read">
+              <div id="p-path-row"><span class="lbl">PATH</span><b id="p-path">—</b></div>
+              <div id="p-contact-row"><span class="lbl">CONTACT</span><b id="p-contact">—</b></div>
+              <div id="p-tempo-row"><span class="lbl">TEMPO</span><b id="p-tempo">—</b></div>
+            </div>
+          </div>
         </div>
-        <div class="aftertouch hidden" id="h-after">AFTER-TOUCH<span id="h-afterspin"></span></div>
+
+        <div class="hints" id="h-hints"></div>
+
+        <div class="juice hidden" id="h-juice">
+          <b class="lbl">SPIN JUICE</b>
+          <div class="jbar"><div class="jfill" id="h-juicefill"></div></div>
+          <span class="num" id="h-juicen"></span>
+        </div>
+        <div class="aftertouch hidden" id="h-after">AFTER-TOUCH<span class="num" id="h-afterspin"></span></div>
         <div class="caught hidden" id="h-caught">HE SAW THAT</div>
         <div class="toast hidden" id="h-toast"></div>
-        <div class="caption hidden" id="h-caption"><i>BOOTH</i><span></span></div>
+        <div class="caption hidden" id="h-caption"><i><u></u>BOOTH</i><span></span></div>
       </div>
       <div id="screen"></div>`;
     this.hud = el('#hud', root);
     this.screen = el('#screen', root);
+    this.pad = new SwingPad(el<HTMLCanvasElement>('#h-padcv', root));
     this.screen.addEventListener('click', (ev) => {
       const t = (ev.target as HTMLElement).closest<HTMLElement>('[data-act]');
       if (!t || t.hasAttribute('disabled')) return;
@@ -133,6 +162,12 @@ export class Hud {
     el(`#${id}`).textContent = text;
   }
 
+  private html(id: string, html: string): void {
+    if (this.cache.get(id) === html) return;
+    this.cache.set(id, html);
+    el(`#${id}`).innerHTML = html;
+  }
+
   private cls(id: string, name: string, on: boolean): void {
     const key = `${id}.${name}`, v = on ? '1' : '0';
     if (this.cache.get(key) === v) return;
@@ -140,11 +175,18 @@ export class Hud {
     el(`#${id}`).classList.toggle(name, on);
   }
 
+  private tone(id: string, tone: Tone): void {
+    const key = `${id}.tone`;
+    if (this.cache.get(key) === tone) return;
+    this.cache.set(key, tone);
+    el(`#${id}`).dataset.tone = tone;
+  }
+
   showHud(on: boolean): void { this.hud.classList.toggle('hidden', !on); }
-  /** Flyover and card pick: hide the club read-outs. */
+  /** Flyover and card pick: hide the instruments. */
   setCinematic(on: boolean): void { this.cls('hud', 'cine', on); }
 
-  setHole(title: string, info: string): void { this.set('h-hole', title); this.set('h-info', info); }
+  setHole(num: string, name: string, info: string): void { this.set('h-hole', num); this.set('h-name', name); this.set('h-info', info); }
   setScore(stroke: number, total: number, cash: number): void {
     this.set('h-stroke', `${stroke}`);
     this.set('h-total', fmtPar(total));
@@ -153,20 +195,32 @@ export class Hud {
 
   setCard(card: Card | null, note = ''): void {
     this.cls('h-card', 'hidden', !card);
-    if (card) this.set('h-card', `${card.icon} ${card.name}${note ? ` · ${note}` : ''}`);
+    if (card) this.html('h-card', `<span>${card.icon}</span><b>${card.name}</b>${note ? `<em>${note}</em>` : ''}`);
+    this.cls('h-card', 'used', note !== '');
   }
 
+  /** screenAngle: 0 = blowing straight down the line you are looking along. */
   setWind(mph: number, screenAngle: number): void {
-    this.set('h-wind', `${Math.round(mph)}`);
-    const deg = `${Math.round((screenAngle * 180) / Math.PI)}`;
+    const n = Math.round(mph);
+    this.set('h-wind', `${n}`);
+    const d = (screenAngle * 180) / Math.PI;
+    const deg = `${Math.round(d)}`;
     if (this.cache.get('windrot') !== deg) {
       this.cache.set('windrot', deg);
       el('#h-windarrow').style.transform = `rotate(${deg}deg)`;
     }
+    const a = Math.abs(d);
+    const side = d > 0 ? 'L → R' : 'R → L';
+    this.set('h-windlbl', n === 0 ? 'CALM' : a < 25 ? 'HELPING' : a > 155 ? 'INTO' : a < 65 ? `HELPING ${side}` : a > 115 ? `INTO ${side}` : `CROSS ${side}`);
   }
 
-  setClub(lie: string, club: string, carry: string, pin: string, read: string): void {
-    this.set('h-lie', lie); this.set('h-club', club); this.set('h-carry', carry); this.set('h-pin', pin); this.set('h-read', read);
+  setClub(lie: string, club: string, carry: string, pin: string, pinUnit: string, read: string): void {
+    this.set('h-lie', lie); this.set('h-club', club); this.set('h-carry', carry);
+    this.set('h-pin', pin); this.set('h-pinunit', pinUnit); this.set('h-read', read);
+  }
+
+  setBag(ids: string[], idx: number): void {
+    this.html('h-strip', ids.map((id, i) => `<i class="${i === idx ? 'on' : ''}">${id}</i>`).join(''));
   }
 
   setMarshal(state: MarshalState, suspicion: number): void {
@@ -176,43 +230,41 @@ export class Hud {
       el('#h-eye').innerHTML = EYE[state];
       el('#h-eyelabel').textContent = EYE_LABEL[state];
     }
-    const s = `${Math.round(Math.min(100, suspicion))}`;
+    const v = Math.round(Math.min(100, suspicion));
+    const s = `${v}`;
     if (this.cache.get('sus') !== s) {
       this.cache.set('sus', s);
-      el('#h-sus').style.width = `${s}%`;
+      el('#h-sus').style.strokeDashoffset = `${(RING * (1 - v / 100)).toFixed(1)}`;
       el('#h-susn').textContent = s;
-      el('#h-marshal').classList.toggle('hot', suspicion >= 70);
+      el('#h-marshal').dataset.heat = v >= 70 ? 'hot' : v >= 40 ? 'warm' : 'cool';
     }
   }
 
-  setHints(html: string): void {
-    if (this.cache.get('hints') === html) return;
-    this.cache.set('hints', html);
-    el('#h-hints').innerHTML = html;
+  setHints(html: string): void { this.html('h-hints', html); }
+
+  /** Which instruments sit along the bottom: the bag and swing lane, or the launch monitor. */
+  setPanels(which: 'aim' | 'flight' | 'none'): void {
+    this.cls('h-bag', 'hidden', which !== 'aim');
+    this.cls('h-monitor', 'hidden', which !== 'flight');
+    this.cls('h-pad', 'hidden', which === 'none');
   }
 
-  showMeter(on: boolean, label = ''): void {
-    this.cls('h-meter', 'hidden', !on);
-    if (on) this.set('h-mlabel', label);
+  drawPad(v: PadView): void { this.pad.draw(v); }
+
+  /** The three swing numbers under the lane. Pass null to blank them. */
+  setPadRead(title: string, power: string, read: { path: [string, Tone]; contact: [string, Tone]; tempo: [string, Tone] } | null): void {
+    this.set('h-padtitle', title);
+    this.set('h-padpow', power);
+    this.set('p-path', read ? read.path[0] : '—');
+    this.set('p-contact', read ? read.contact[0] : '—');
+    this.set('p-tempo', read ? read.tempo[0] : '—');
+    this.tone('p-path-row', read ? read.path[1] : '');
+    this.tone('p-contact-row', read ? read.contact[1] : '');
+    this.tone('p-tempo-row', read ? read.tempo[1] : '');
   }
 
-  setMeter(m: MeterView): void {
-    const pct = (u: number): string => `${(u * 100).toFixed(2)}%`;
-    el('#m-marker').style.left = pct(m.marker);
-    el('#m-sweet').style.left = pct(m.sweet);
-    el('#m-full').style.left = pct(m.full);
-    el('#m-over').style.left = pct(m.full);
-    const win = el('#m-win');
-    win.style.left = pct(m.sweet - m.window);
-    win.style.width = pct(m.window * 2);
-    const top = m.power >= 0 ? m.power : m.marker;
-    const fill = el('#m-fill');
-    fill.style.left = pct(m.sweet);
-    fill.style.width = pct(Math.max(0, top - m.sweet));
-    this.cls('m-pow', 'hidden', m.power < 0);
-    if (m.power >= 0) el('#m-pow').style.left = pct(m.power);
-    this.cls('m-tick', 'hidden', m.tick < 0);
-    if (m.tick >= 0) el('#m-tick').style.left = pct(m.tick);
+  setMonitor(rows: MonitorRow[]): void {
+    this.html('h-mongrid', rows.map((r) => `<div data-tone="${r.tone ?? ''}"><span class="lbl">${r.k}</span><b class="num">${r.v}</b><em class="lbl">${r.u ?? ''}</em></div>`).join(''));
   }
 
   setJuice(visible: boolean, frac: number, seconds: number, active: boolean): void {
@@ -282,7 +334,7 @@ export class Hud {
 
   showLoading(text: string, frac: number): void {
     if (!this.screen.querySelector('.loading')) {
-      this.open(/* html */ `<div class="loading"><h1>BULLSHIT<em>GOLF</em></h1><div class="lbar"><div></div></div><p></p></div>`, {}, 'solid');
+      this.open(/* html */ `<div class="loading">${WORDMARK}<div class="lbar"><div></div></div><p class="lbl"></p></div>`, {}, 'solid');
     }
     el('.loading p', this.screen).textContent = text;
     el<HTMLElement>('.lbar div', this.screen).style.width = `${Math.round(frac * 100)}%`;
@@ -290,55 +342,72 @@ export class Hud {
 
   /** Thin veil while a hole streams in; the game keeps its own screen afterwards. */
   showVeil(text: string): void {
-    this.open(/* html */ `<div class="veil"><div class="spinner"></div><p>${text}</p></div>`, {}, 'solid');
+    this.open(/* html */ `<div class="veil"><div class="spinner"></div><p class="lbl">${text}</p></div>`, {}, 'solid');
   }
 
   showMenu(save: Save, h: { play: () => void; shop: () => void; how: () => void; settings: () => void }): void {
     this.open(/* html */ `
       <div class="menu">
-        <div class="title">
-          <span class="kicker">THE 7TH AND 8TH AT GATOR CREEK</span>
-          <h1>BULLSHIT<em>GOLF</em></h1>
-          <p>A photo-real golf simulation. Please do not watch the ball too closely.</p>
+        <div class="rail">
+          <div class="title">
+            <span class="kicker">GATOR CREEK G.C. · HOLES 7 &amp; 8</span>
+            ${WORDMARK}
+            <p>Tour-grade ball flight. A real swing, in your hand. A course marshal who is not always looking.</p>
+          </div>
+          <nav>
+            <button class="primary" data-act="play"><i>01</i><b>TEE OFF</b><small>WEEK ${save.week}</small></button>
+            <button data-act="shop"><i>02</i><b>PRO SHOP</b><small class="gold">${money(save.money)}</small></button>
+            <button data-act="how"><i>03</i><b>HOW TO PLAY</b><small>MOUSE SWING</small></button>
+            <button data-act="settings"><i>04</i><b>SETTINGS</b><small></small></button>
+          </nav>
+          <footer>
+            <div><span class="lbl">WALLET</span><b class="num gold">${money(save.money)}</b></div>
+            <div><span class="lbl">BEST ROUND</span><b class="num">${save.best === null ? '—' : fmtPar(save.best)}</b></div>
+            <div><span class="lbl">ROUNDS</span><b class="num">${save.rounds}</b></div>
+            <div><span class="lbl">DISQUALIFIED</span><b class="num">${save.dqs}</b></div>
+          </footer>
         </div>
-        <nav>
-          <button class="primary" data-act="play">TEE OFF <small>WEEK ${save.week}</small></button>
-          <button data-act="shop">PRO SHOP <small>${money(save.money)}</small></button>
-          <button data-act="how">HOW TO PLAY</button>
-          <button data-act="settings">SETTINGS</button>
-        </nav>
-        <footer>
-          <span>WALLET <b>${money(save.money)}</b></span>
-          <span>BEST ROUND <b>${save.best === null ? '—' : fmtPar(save.best)}</b></span>
-          <span>ROUNDS <b>${save.rounds}</b></span>
-          <span>DISQUALIFIED <b>${save.dqs}</b></span>
-        </footer>
       </div>`, { play: h.play, shop: h.shop, how: h.how, settings: h.settings });
   }
 
   showHow(back: () => void): void {
     this.open(/* html */ `
-      <div class="sheet">
-        <h2>HOW TO PLAY</h2>
+      <div class="sheet how">
+        <header><span class="kicker">THE MANUAL</span><h2>HOW TO PLAY</h2></header>
         <div class="cols">
           <section>
-            <h3>1 · The swing is honest. And hard.</h3>
-            <p><kbd>A</kbd><kbd>D</kbd> aim, <kbd>W</kbd><kbd>S</kbd> change club (hold <kbd>Shift</kbd> to aim finely). Then three presses of <kbd>Space</kbd>:</p>
-            <ol>
-              <li>start the swing,</li>
-              <li>stop the bar for power (past 100 is an overswing: more distance, less margin),</li>
-              <li>stop it again <b>exactly</b> on the white line.</li>
-            </ol>
-            <p>Miss early and you pull or hook it. Miss late and you slice. Miss badly and you shank, chunk or top it. Rough and sand shrink the window.</p>
+            <span class="step">01</span>
+            <h3>The swing is in your hand</h3>
+            <div class="swingdemo">
+              <svg viewBox="0 0 120 150">
+                <rect x="38" y="20" width="44" height="118" rx="4" fill="rgba(255,255,255,0.05)"/>
+                <path d="M60 8V138" stroke="rgba(255,255,255,0.25)" stroke-dasharray="3 5"/>
+                <path d="M57 26 C54 60 55 96 58 124" fill="none" stroke="#eef2ea" stroke-width="2" stroke-linecap="round"/>
+                <path d="M64 124 C66 92 65 58 62 28" fill="none" stroke="#c8f03c" stroke-width="3" stroke-linecap="round"/>
+                <path d="M53 116l5 9 4-9M58 36l4-9 5 9" fill="none" stroke="#eef2ea" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <circle cx="60" cy="20" r="6" fill="#fff"/>
+                <text x="30" y="80" text-anchor="end">1 PULL</text><text x="90" y="80">2 PUSH</text>
+              </svg>
+              <p><b>Hold</b> ${MOUSE.l} on the course, <b>pull the mouse back</b>, then <b>push it through the ball</b>. How far you pull is the power. Let go on the way back to step away.</p>
+            </div>
+            <dl>
+              <dt>Path</dt><dd>Push straight to hit it straight. Swing out to the right and it draws left. Cut across to the left and it fades right.</dd>
+              <dt>Contact</dt><dd>Come back through the ball. Miss wide right and you catch the hosel. Wide left is off the toe.</dd>
+              <dt>Tempo</dt><dd>Three counts back, one count through. Two to one on the green. Snatch it and you thin it; ease off and you hit it fat.</dd>
+            </dl>
+            <p class="fine">${MOUSE.r} drag or <kbd>A</kbd><kbd>D</kbd> to aim · ${MOUSE.w} or <kbd>W</kbd><kbd>S</kbd> for the club · rough and sand shrink every margin.</p>
           </section>
           <section class="hot">
-            <h3>2 · So cheat.</h3>
-            <p>While the ball is in the air, <b>hold</b> <kbd>A</kbd>/<kbd>D</kbd> to bend it, <kbd>W</kbd> to make it dive and run, <kbd>S</kbd> to float it and make it bite. Time slows while you steer. It works on a rolling ball too.</p>
+            <span class="step">02</span>
+            <h3>So cheat</h3>
+            <p>While the ball is in the air, <b>hold</b> <kbd>A</kbd>/<kbd>D</kbd> to bend it, <kbd>W</kbd> to make it dive and run, <kbd>S</kbd> to float it and make it bite. Or hold ${MOUSE.l} and drag the way you want it to go.</p>
+            <p>Time slows while you steer. It works on a rolling ball too.</p>
             <p>Steering burns <b>Spin Juice</b>. You get a small tank per hole.</p>
-            <p>Before each hole you may take one <b>cheat card</b>: a magnetic cup, a bribed wind, a foot wedge…</p>
+            <p>Before each hole your caddie offers one <b>cheat card</b>: a magnetic cup, a bribed wind, a foot wedge.</p>
           </section>
           <section>
-            <h3>3 · Do not get caught.</h3>
+            <span class="step">03</span>
+            <h3>Do not get caught</h3>
             <p>The <b>course marshal</b> looks up from his sandwich every few seconds. Steering while he is <b>not looking</b> raises suspicion slowly. Steering while he is <b>watching</b> raises it very fast.</p>
             <p>Cards add suspicion too. Playing a hole straight calms him down.</p>
             <p>Reach 100 and you are <b>disqualified</b>: no prize money, and a ride in the cart.</p>
@@ -349,17 +418,19 @@ export class Hud {
       </div>`, { back });
   }
 
-  showSettings(save: Save, h: { volume: (v: number) => void; quality: (q: Quality) => void; reset: () => void; back: () => void }): void {
+  showSettings(save: Save, h: { volume: (v: number) => void; sens: (v: number) => void; quality: (q: Quality) => void; reset: () => void; back: () => void }): void {
     const q = (id: Quality, label: string): string => `<button data-act="quality" data-arg="${id}" class="${save.quality === id ? 'on' : ''}">${label}</button>`;
     this.open(/* html */ `
       <div class="sheet narrow">
-        <h2>SETTINGS</h2>
+        <header><span class="kicker">CLUBHOUSE</span><h2>SETTINGS</h2></header>
         <label class="field"><span>Volume</span><input type="range" min="0" max="1" step="0.05" value="${save.volume}" data-input="volume"></label>
+        <label class="field"><span>Swing length<small>how far the mouse travels for a full swing</small></span><input type="range" min="0.6" max="1.6" step="0.05" value="${save.sens}" data-input="sens"></label>
         <div class="field"><span>Graphics</span><div class="seg">${q('low', 'LOW')}${q('medium', 'MEDIUM')}${q('high', 'HIGH')}</div></div>
         <div class="field"><span>Save data</span><button class="danger" data-act="reset">RESET PROGRESS</button></div>
         <div class="row"><button class="primary" data-act="back">DONE</button></div>
       </div>`, {
       volume: (v) => h.volume(Number(v)),
+      sens: (v) => h.sens(Number(v)),
       quality: (v) => h.quality(v as Quality),
       reset: h.reset,
       back: h.back,
@@ -374,14 +445,16 @@ export class Hud {
       const pips = Array.from({ length: u.max }, (_, i) => `<i class="${i < lvl ? 'on' : ''}"></i>`).join('');
       return /* html */ `
         <div class="up ${maxed ? 'maxed' : ''}">
-          <div class="upinfo"><b>${u.name}</b><span>${u.blurb}</span><em>${u.per} per level</em></div>
-          <div class="pips">${pips}</div>
-          <button data-act="buy" data-arg="${u.id}" ${maxed || cost > save.money ? 'disabled' : ''}>${maxed ? 'MAXED' : money(cost)}</button>
+          <div class="uphead"><b>${u.name}</b><div class="pips">${pips}</div></div>
+          <p>${u.blurb}</p>
+          <div class="upfoot"><em class="lbl">${u.per} per level</em>
+            <button data-act="buy" data-arg="${u.id}" ${maxed || cost > save.money ? 'disabled' : ''}>${maxed ? 'MAXED' : money(cost)}</button>
+          </div>
         </div>`;
     }).join('');
     this.open(/* html */ `
-      <div class="sheet">
-        <h2>PRO SHOP <span class="wallet">${money(save.money)}</span></h2>
+      <div class="sheet shop">
+        <header><span class="kicker">GATOR CREEK</span><h2>PRO SHOP</h2><div class="wallet"><span class="lbl">WALLET</span><b class="num">${money(save.money)}</b></div></header>
         <p class="sub">Everything here is within the rules, in the sense that the rules have not been updated since 1974.</p>
         <div class="ups">${rows}</div>
         <div class="row"><button class="primary" data-act="back">${backLabel}</button></div>
@@ -389,53 +462,51 @@ export class Hud {
   }
 
   showCards(holeTitle: string, cards: Card[], suspicion: number, honestRelief: number, pick: (id: string | null) => void): void {
-    const list = cards.map((c) => /* html */ `
-      <button class="card" data-act="pick" data-arg="${c.id}">
+    const list = cards.map((c, i) => /* html */ `
+      <button class="card" data-act="pick" data-arg="${c.id}" style="--i:${i}">
         <div class="cicon">${c.icon}</div>
         <b>${c.name}</b>
         <p>${c.blurb}</p>
         <i>${c.flavor}</i>
-        <span class="heat">+${c.heat} SUSPICION</span>
+        <span class="heat"><u style="width:${Math.min(100, c.heat * 5)}%"></u><em>+${c.heat} SUSPICION</em></span>
       </button>`).join('');
     this.open(/* html */ `
       <div class="cards">
         <span class="kicker">${holeTitle}</span>
         <h2>YOUR CADDIE HAS SOMETHING FOR YOU</h2>
         <div class="cardrow">${list}</div>
-        <button class="honest" data-act="honest">PLAY IT STRAIGHT <small>no card · −${honestRelief} suspicion if you also keep your hands off the ball</small></button>
-        <div class="susline">Marshal suspicion right now: <b>${Math.round(suspicion)}</b> / 100</div>
+        <button class="honest" data-act="honest"><b>PLAY IT STRAIGHT</b><small>no card · −${honestRelief} suspicion if you also keep your hands off the ball</small></button>
+        <div class="susline lbl">MARSHAL SUSPICION <b class="num">${Math.round(suspicion)}</b> / 100</div>
       </div>`, { pick: (id) => pick(id), honest: () => pick(null) });
   }
 
   showSummary(s: HoleSummary, next: () => void): void {
-    const lines = s.lines.map(([a, b]) => `<div><span>${a}</span><b>${b}</b></div>`).join('');
+    const lines = s.lines.map(([a, b]) => `<div><span>${a}</span><b class="num">${b}</b></div>`).join('');
     this.open(/* html */ `
       <div class="sheet narrow summary">
-        <span class="kicker">${s.title}</span>
-        <h2 class="${s.scoreClass}">${s.scoreName}</h2>
-        <div class="bigscore"><b>${s.strokes}</b><span>strokes · par ${s.par}</span></div>
-        <div class="ledger">${lines}<div class="sum"><span>Hole winnings</span><b>${money(s.total)}</b></div></div>
-        <div class="susline">Marshal suspicion: <b>${Math.round(s.suspicion)}</b> / 100</div>
+        <header><span class="kicker">${s.title}</span><h2 class="${s.scoreClass}">${s.scoreName}</h2></header>
+        <div class="bigscore"><b class="num">${s.strokes}</b><span class="lbl">STROKES · PAR ${s.par}</span></div>
+        <div class="ledger">${lines}<div class="sum"><span>Hole winnings</span><b class="num">${money(s.total)}</b></div></div>
+        <div class="susline lbl">MARSHAL SUSPICION <b class="num">${Math.round(s.suspicion)}</b> / 100</div>
         <div class="row"><button class="primary" data-act="next">${s.last ? 'FINISH ROUND' : 'NEXT HOLE'}</button></div>
       </div>`, { next });
   }
 
   showResults(r: RoundResults, h: { again: () => void; shop: () => void; menu: () => void }): void {
-    const rows = r.rows.map((x) => `<tr><td>${x.hole}</td><td>${x.name}</td><td>${x.par}</td><td><b>${x.strokes}</b></td><td>${fmtPar(x.strokes - x.par)}</td></tr>`).join('');
+    const rows = r.rows.map((x) => `<tr><td class="num">${x.hole}</td><td>${x.name}</td><td class="num">${x.par}</td><td class="num"><b>${x.strokes}</b></td><td class="num">${fmtPar(x.strokes - x.par)}</td></tr>`).join('');
     this.open(/* html */ `
       <div class="sheet narrow results ${r.dq ? 'dq' : ''}">
-        <span class="kicker">${r.dq ? 'ROUND VOID' : 'ROUND COMPLETE'}</span>
-        <h2>${r.dq ? 'DISQUALIFIED' : `FINAL: ${fmtPar(r.toPar)}`}</h2>
+        <header><span class="kicker">${r.dq ? 'ROUND VOID' : 'ROUND COMPLETE'}</span><h2>${r.dq ? 'DISQUALIFIED' : `FINAL ${fmtPar(r.toPar)}`}</h2></header>
         ${rows ? `<table><thead><tr><th>HOLE</th><th></th><th>PAR</th><th>SCORE</th><th></th></tr></thead><tbody>${rows}</tbody></table>` : ''}
         <div class="ledger">
-          <div><span>Prize money won</span><b>${money(r.earned)}</b></div>
-          ${r.dq ? `<div><span>Confiscated by the marshal</span><b>−${money(r.earned)}</b></div>` : ''}
-          <div class="sum"><span>${r.dq ? 'Gas money' : 'Banked'}</span><b>${money(r.kept)}</b></div>
-          <div><span>Wallet</span><b>${money(r.wallet)}</b></div>
+          <div><span>Prize money won</span><b class="num">${money(r.earned)}</b></div>
+          ${r.dq ? `<div><span>Confiscated by the marshal</span><b class="num">−${money(r.earned)}</b></div>` : ''}
+          <div class="sum"><span>${r.dq ? 'Gas money' : 'Banked'}</span><b class="num">${money(r.kept)}</b></div>
+          <div><span>Wallet</span><b class="num">${money(r.wallet)}</b></div>
         </div>
         <p class="sub">${r.dq
           ? 'Your name has been written in the book. Same week next time; the marshal has a short memory and a long lunch.'
-          : `Week ${r.week} is next. More wind, a smaller sweet spot and a more attentive marshal.`}</p>
+          : `Week ${r.week} is next. More wind, less margin on the club face and a more attentive marshal.`}</p>
         <div class="row">
           <button class="primary" data-act="again">${r.dq ? 'TRY AGAIN' : `PLAY WEEK ${r.week}`}</button>
           <button data-act="shop">PRO SHOP</button>
@@ -447,7 +518,7 @@ export class Hud {
   showPause(h: { resume: () => void; settings: () => void; how: () => void; quit: () => void }): void {
     this.open(/* html */ `
       <div class="sheet narrow pause">
-        <h2>PAUSED</h2>
+        <header><span class="kicker">PLAY SUSPENDED</span><h2>PAUSED</h2></header>
         <nav class="stack">
           <button class="primary" data-act="resume">RESUME</button>
           <button data-act="how">HOW TO PLAY</button>
@@ -458,6 +529,6 @@ export class Hud {
   }
 
   showDq(text: string): void {
-    this.open(/* html */ `<div class="dqbanner"><h1>DISQUALIFIED</h1><p>${text}</p></div>`, {});
+    this.open(/* html */ `<div class="dqbanner"><span class="lbl">OFFICIAL RULING</span><h1>DISQUALIFIED</h1><p>${text}</p></div>`, {});
   }
 }
